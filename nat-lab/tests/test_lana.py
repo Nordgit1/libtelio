@@ -115,11 +115,14 @@ IP_STACK_TEST_CONFIGS = [
 ]
 
 
-def build_telio_features(initial_heartbeat_interval: int = 300) -> Features:
+def build_telio_features(
+    initial_heartbeat_interval: int = 300, custom_ip_range: str = ""
+) -> Features:
     features = default_features(
         enable_lana=(CONTAINER_EVENT_PATH, False),
         enable_direct=True,
         enable_nurse=True,
+        enable_firewall=(custom_ip_range, False),
     )
     assert features.direct
     features.direct.providers = [EndpointProvider.STUN]
@@ -1261,7 +1264,11 @@ async def test_lana_with_meshnet_exit_node(
 
         api = API()
         (alpha, beta) = api.default_config_two_nodes(
-            True, True, alpha_ip_stack=alpha_ip_stack, beta_ip_stack=beta_ip_stack
+            True,
+            True,
+            alpha_ip_stack=alpha_ip_stack,
+            beta_ip_stack=beta_ip_stack,
+            allow_peer_traffic_routing=True,
         )
         (connection_alpha, alpha_conn_tracker) = await exit_stack.enter_async_context(
             new_connection_with_conn_tracker(
@@ -1272,6 +1279,7 @@ async def test_lana_with_meshnet_exit_node(
                 ),
             )
         )
+
         (connection_beta, beta_conn_tracker) = await exit_stack.enter_async_context(
             new_connection_with_conn_tracker(
                 ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK,
@@ -1308,8 +1316,8 @@ async def test_lana_with_meshnet_exit_node(
             beta,
             connection_alpha,
             connection_beta,
-            build_telio_features(),
-            build_telio_features(),
+            build_telio_features(custom_ip_range="10.0.0.0/8"),
+            build_telio_features(custom_ip_range="10.0.0.0/8"),
         )
 
         await asyncio.gather(

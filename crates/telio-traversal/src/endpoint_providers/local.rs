@@ -97,7 +97,7 @@ impl<T: WireGuard, G: GetIfAddrs> EndpointProvider for LocalInterfacesEndpointPr
     }
 }
 
-impl<T: WireGuard> LocalInterfacesEndpointProvider<T> {
+impl<T: WireGuard, G: GetIfAddrs> LocalInterfacesEndpointProvider<T, G> {
     pub fn new(
         udp_socket: External<UdpSocket>,
         wireguard_interface: Arc<T>,
@@ -109,12 +109,10 @@ impl<T: WireGuard> LocalInterfacesEndpointProvider<T> {
             wireguard_interface,
             poll_interval,
             ping_pong_handler,
-            SystemGetIfAddrs,
+            G::default(),
         )
     }
-}
 
-impl<T: WireGuard, G: GetIfAddrs> LocalInterfacesEndpointProvider<T, G> {
     pub fn new_with(
         udp_socket: External<UdpSocket>,
         wireguard_interface: Arc<T>,
@@ -269,7 +267,10 @@ mod tests {
 
     use super::*;
     use maplit::hashmap;
-    use std::net::Ipv4Addr;
+    use std::{
+        net::{Ipv4Addr, Ipv6Addr},
+        sync::atomic::{AtomicU8, Ordering},
+    };
     use telio_crypto::{
         encryption::{decrypt_request, decrypt_response, encrypt_request, encrypt_response},
         SecretKey,
@@ -482,7 +483,6 @@ mod tests {
         get_if_addrs_mock
             .expect_get()
             .returning(|| generate_fake_local_interface(1));
-
         let (
             local_provider,
             _,
@@ -555,7 +555,6 @@ mod tests {
         get_if_addrs_mock
             .expect_get()
             .returning(|| generate_fake_local_interface(1));
-
         let (local_provider, _, mut pong_rx, peer_socket, peer_addr, _, local_sk, _) =
             prepare_local_provider_test(wg_mock, get_if_addrs_mock).await;
 
@@ -674,7 +673,6 @@ mod tests {
         get_if_addrs_mock
             .expect_get()
             .returning(|| generate_fake_local_interface(1));
-
         let (state, remote_sk, ping_pong_handler) =
             prepare_state_test(wg_mock, get_if_addrs_mock).await;
 
