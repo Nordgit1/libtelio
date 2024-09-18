@@ -4058,6 +4058,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "systests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.13.1",
+ "clap 3.2.25",
+ "crypto_box",
+ "dirs",
+ "futures",
+ "hex",
+ "interprocess",
+ "ipnet",
+ "parking_lot",
+ "rand",
+ "regex",
+ "reqwest",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shellwords",
+ "sysinfo",
+ "telio",
+ "telio-crypto",
+ "telio-model",
+ "telio-nat-detect",
+ "telio-proto",
+ "telio-relay",
+ "telio-sockets",
+ "telio-task",
+ "telio-traversal",
+ "telio-utils",
+ "telio-wg",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "take-until"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

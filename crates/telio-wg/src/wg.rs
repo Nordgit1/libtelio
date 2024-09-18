@@ -234,19 +234,13 @@ struct State {
 const POLL_MILLIS: u64 = 1000;
 const MAX_UAPI_FAIL_COUNT: i32 = 10;
 
-#[cfg(all(not(any(test, feature = "test-adapter")), windows))]
+#[cfg(all(windows))]
 const DEFAULT_NAME: &str = "NordLynx";
 
-#[cfg(all(
-    not(any(test, feature = "test-adapter")),
-    any(target_os = "macos", target_os = "ios", target_os = "tvos")
-))]
+#[cfg(all(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
 const DEFAULT_NAME: &str = "utun10";
 
-#[cfg(all(
-    not(any(test, feature = "test-adapter")),
-    any(target_os = "linux", target_os = "android")
-))]
+#[cfg(all(any(target_os = "linux", target_os = "android")))]
 const DEFAULT_NAME: &str = "nlx0";
 
 impl DynamicWg {
@@ -366,7 +360,7 @@ impl DynamicWg {
         }
     }
 
-    #[cfg(not(any(test, feature = "test-adapter")))]
+    //#[cfg(not(any(test, feature = "test-adapter")))]
     fn start_adapter(cfg: Config) -> Result<Box<dyn Adapter>, Error> {
         adapter::start(
             cfg.adapter,
@@ -379,16 +373,16 @@ impl DynamicWg {
         )
     }
 
-    #[cfg(any(test, feature = "test-adapter"))]
-    fn start_adapter(_cfg: Config) -> Result<Box<dyn Adapter>, Error> {
-        use std::sync::Mutex;
-
-        if let Some(adapter) = tests::RUNTIME_ADAPTER.lock().unwrap().take() {
-            Ok(adapter)
-        } else {
-            Err(Error::RestartFailed)
-        }
-    }
+    //#[cfg(any(test, feature = "test-adapter"))]
+    //fn start_adapter(_cfg: Config) -> Result<Box<dyn Adapter>, Error> {
+    //    use std::sync::Mutex;
+    //
+    //    if let Some(adapter) = tests::RUNTIME_ADAPTER.lock().unwrap().take() {
+    //        Ok(adapter)
+    //    } else {
+    //        Err(Error::RestartFailed)
+    //    }
+    //}
 }
 
 #[async_trait]
@@ -1079,7 +1073,7 @@ pub mod tests {
 
     lazy_static! {
         pub(super) static ref RUNTIME_ADAPTER: StdMutex<Option<Box<dyn Adapter>>> =
-            StdMutex::new(None);
+            StdMutex::new(Some(Box::new(MockAdapter::new())));
     }
 
     fn random_interface() -> Interface {

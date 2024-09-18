@@ -125,6 +125,7 @@ def run_build_command(operating_system, args):
             "../../ci/build.sh",
             "--default",
             operating_system,
+            "--debug",
         ]
     command.extend(["--uniffi-test-bindings"])
     if args.restart:

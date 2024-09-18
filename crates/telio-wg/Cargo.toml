@@ -6,9 +6,6 @@ license = "GPL-3.0-only"
 repository = "https://github.com/NordSecurity/libtelio"
 publish = false
 
-[features]
-test-adapter = []
-
 [dependencies]
 slog-stdlog = "4.1.0"
 wireguard-uapi = { version = "2.0.4", features = ["xplatform"], default-features = false }

@@ -92,7 +92,7 @@ telio-batcher = { workspace = true }
 telio-pq = { workspace = true, features = ["mockall"] }
 telio-test.workspace = true
 telio-traversal = { workspace = true, features = ["mockall"] }
-telio-wg = { workspace = true, features = ["mockall", "test-adapter"] }
+telio-wg = { workspace = true, features = ["mockall"] }
 
 [build-dependencies]
 anyhow.workspace = true
@@ -107,6 +107,7 @@ resolver = "2"
 members = [
 	"crates/*",
 	"clis/*",
+	"systests",
 ]
 exclude = [
 	"wireguard-go-rust-wrapper"

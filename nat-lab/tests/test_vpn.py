@@ -63,6 +63,43 @@ class VpnConfig:
             f" should_ping_client={self.should_ping_client})"
         )
 
+@pytest.mark.parametrize(
+    "alpha_setup_params, public_ip",
+    [
+        pytest.param(
+            SetupParameters(
+                connection_tag=ConnectionTag.DOCKER_CONE_CLIENT_1,
+                adapter_type=AdapterType.BoringTun,
+                is_meshnet=False,
+            ),
+            "10.0.254.1",
+        ),
+    ],
+)
+async def test_dummy(
+    alpha_setup_params: SetupParameters,
+    public_ip: str,
+) -> None:
+    async with AsyncExitStack() as exit_stack:
+        env = await exit_stack.enter_async_context(
+            setup_environment(exit_stack, [alpha_setup_params])
+        )
+
+        alpha, *_ = env.nodes
+        client_conn, *_ = [conn.connection for conn in env.connections]
+        client_alpha, *_ = env.clients
+
+        ip = await stun.get(client_conn, config.STUN_SERVER)
+        assert ip == public_ip, f"wrong public IP before connecting to VPN {ip}"
+
+        await _connect_vpn(
+            client_conn,
+            None,
+            client_alpha,
+            alpha.ip_addresses[0],
+            config.WG_SERVER,
+        )
+        raise Exception()
 
 @pytest.mark.parametrize(
     "alpha_setup_params, public_ip",
