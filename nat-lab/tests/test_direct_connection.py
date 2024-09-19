@@ -6,9 +6,11 @@ import pytest
 import re
 import telio
 import timeouts
+from collections import defaultdict
 from config import DERP_SERVERS
-from contextlib import AsyncExitStack
-from helpers import setup_mesh_nodes, SetupParameters
+from contextlib import AsyncExitStack, asynccontextmanager
+from helpers import Environment, setup_mesh_nodes, SetupParameters
+from mesh_api import Node
 from telio import PathType, State
 from telio_features import (
     Batching,
@@ -21,16 +23,15 @@ from telio_features import (
     FeatureEndpointProvidersOptimization,
     PersistentKeepalive,
 )
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 from utils.asyncio_util import run_async_context
-from utils.connection_util import ConnectionTag
+from utils.connection_util import Connection, ConnectionTag
 from utils.ping import ping
 from utils.telio_log_notifier import TelioLogNotifier
 
-# Testing if batching being disabled or not there doesn't affect anything
-DISABLED_BATCHING_OPTIONS = (None, Batching(direct_connection_threshold=5))
 ANY_PROVIDERS = ["local", "stun"]
 
+DOCKER_CONE_GW_1_IP = "10.0.254.1"
 DOCKER_CONE_GW_2_IP = "10.0.254.2"
 DOCKER_FULLCONE_GW_1_IP = "10.0.254.9"
 DOCKER_FULLCONE_GW_2_IP = "10.0.254.6"
@@ -39,12 +40,12 @@ DOCKER_OPEN_INTERNET_CLIENT_2_IP = "10.0.11.3"
 DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK_IP = "10.0.11.4"
 DOCKER_SYMMETRIC_CLIENT_1_IP = "192.168.103.88"
 DOCKER_SYMMETRIC_GW_1_IP = "10.0.254.3"
-DOCKER_UPNP_CLIENT_2_IP = "10.0.254.12"
+DOCKER_UPNP_GW_1_IP = "10.0.254.5"
+DOCKER_UPNP_GW_2_IP = "10.0.254.12"
 
 
-def _generate_setup_parameter_pair(
-    left: Tuple[ConnectionTag, List[str], Optional[Batching]],
-    right: Tuple[ConnectionTag, List[str], Optional[Batching]],
+def _generate_setup_parameters(
+    clients: List[Tuple[ConnectionTag, List[str], bool]],
 ) -> List[SetupParameters]:
     return [
         SetupParameters(
@@ -52,240 +53,198 @@ def _generate_setup_parameter_pair(
             adapter_type=telio.AdapterType.BoringTun,
             features=TelioFeatures(
                 direct=Direct(providers=endpoint_providers),
-                batching=batching,
+                batching=Batching(direct_connection_threshold=5) if batching else None,
                 wireguard=Wireguard(
                     persistent_keepalive=PersistentKeepalive(direct=10),
                 ),
             ),
             fingerprint=f"{conn_tag}",
         )
-        for (conn_tag, endpoint_providers, batching) in (left, right)
+        for conn_tag, endpoint_providers, batching in clients
     ]
 
 
+def _generate_setup_parameters_with_reflexive_ips(
+    clients: List[Tuple[ConnectionTag, List[str], bool, str]],
+) -> Tuple[List[SetupParameters], List[str]]:
+    setup_parameters = _generate_setup_parameters(
+        [(ct, p, b) for ct, p, b, _ in clients]
+    )
+    return setup_parameters, [gw_ip for *_, gw_ip in clients]
+
+
+# fmt: off
 UHP_WORKING_PATHS_PARAMS = [
-    (
-        (
-            (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_FULLCONE_CLIENT_2, ["stun"]),
-        ),
-        DOCKER_FULLCONE_GW_2_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["stun"]),
-        ),
-        DOCKER_FULLCONE_GW_1_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["stun"]),
-        ),
-        DOCKER_FULLCONE_GW_1_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_CONE_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["stun"]),
-        ),
-        DOCKER_FULLCONE_GW_1_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_CONE_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_CONE_CLIENT_2, ["stun"]),
-        ),
-        DOCKER_CONE_GW_2_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_CONE_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["stun"]),
-        ),
-        DOCKER_OPEN_INTERNET_CLIENT_1_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_2, ["stun"]),
-        ),
-        DOCKER_OPEN_INTERNET_CLIENT_2_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["stun"]),
-        ),
-        DOCKER_OPEN_INTERNET_CLIENT_1_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_UPNP_CLIENT_1, ["upnp"]),
-            (ConnectionTag.DOCKER_UPNP_CLIENT_2, ["upnp"]),
-        ),
-        DOCKER_UPNP_CLIENT_2_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK, ["stun"]),
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_2, ["stun"]),
-        ),
-        DOCKER_OPEN_INTERNET_CLIENT_2_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK, ["stun"]),
-        ),
-        DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ["local"]),
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"]),
-        ),
-        DOCKER_OPEN_INTERNET_CLIENT_1_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_CONE_CLIENT_1, ["local"]),
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"]),
-        ),
-        DOCKER_OPEN_INTERNET_CLIENT_1_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["local"]),
-            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"]),
-        ),
-        DOCKER_OPEN_INTERNET_CLIENT_1_IP,
-    ),
-    (
-        (
-            (ConnectionTag.DOCKER_INTERNAL_SYMMETRIC_CLIENT, ["local"]),
-            (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ["local"]),
-        ),
-        DOCKER_SYMMETRIC_CLIENT_1_IP,
-    ),
+    [
+        (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["stun"], True, DOCKER_FULLCONE_GW_1_IP),
+        (ConnectionTag.DOCKER_FULLCONE_CLIENT_2, ["stun"], False, DOCKER_FULLCONE_GW_2_IP),
+        (ConnectionTag.DOCKER_CONE_CLIENT_1, ["stun"], True, DOCKER_CONE_GW_1_IP),
+        (ConnectionTag.DOCKER_CONE_CLIENT_2, ["stun"], False, DOCKER_CONE_GW_2_IP),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["stun"], True, DOCKER_OPEN_INTERNET_CLIENT_1_IP),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_2, ["stun"], False, DOCKER_OPEN_INTERNET_CLIENT_2_IP),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK, ["stun"], False, DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK_IP),
+        (ConnectionTag.DOCKER_UPNP_CLIENT_1, ["upnp"], True, DOCKER_UPNP_GW_1_IP),
+        (ConnectionTag.DOCKER_UPNP_CLIENT_2, ["upnp"], False, DOCKER_UPNP_GW_2_IP),
+    ],
+    [
+        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ["stun"], True, DOCKER_SYMMETRIC_GW_1_IP),
+        (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["stun"], True, DOCKER_FULLCONE_GW_1_IP),
+        (ConnectionTag.DOCKER_FULLCONE_CLIENT_2, ["stun"], False, DOCKER_FULLCONE_GW_2_IP),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["stun"], True, DOCKER_OPEN_INTERNET_CLIENT_1_IP),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_2, ["stun"], False, DOCKER_OPEN_INTERNET_CLIENT_2_IP),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK, ["stun"], True, DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK_IP),
+    ],
+    [
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"], True, DOCKER_OPEN_INTERNET_CLIENT_1_IP),
+        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ["local"], True, DOCKER_OPEN_INTERNET_CLIENT_1_IP),
+    ],
+    [
+        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ["local"], True, DOCKER_SYMMETRIC_CLIENT_1_IP),
+        (ConnectionTag.DOCKER_INTERNAL_SYMMETRIC_CLIENT, ["local"], True, DOCKER_SYMMETRIC_CLIENT_1_IP),
+    ],
 ]
-
-UHP_WORKING_PATHS = [
-    pytest.param(
-        _generate_setup_parameter_pair((a[0], a[1], batch_a), (b[0], b[1], batch_b)), ip
-    )
-    for (a, b), ip in UHP_WORKING_PATHS_PARAMS
-    for (batch_a, batch_b) in itertools.product(DISABLED_BATCHING_OPTIONS, repeat=2)
-]
-
-UHP_FAILING_PATHS_PARAMS = [
-    (
-        (ConnectionTag.DOCKER_CONE_CLIENT_1, ANY_PROVIDERS),
-        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ANY_PROVIDERS),
-    ),
-    (
-        (ConnectionTag.DOCKER_CONE_CLIENT_1, ANY_PROVIDERS),
-        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_1, ANY_PROVIDERS),
-    ),
-    (
-        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ANY_PROVIDERS),
-        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_2, ANY_PROVIDERS),
-    ),
-    (
-        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ANY_PROVIDERS),
-        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_1, ANY_PROVIDERS),
-    ),
-    (
-        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ANY_PROVIDERS),
-        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_1, ANY_PROVIDERS),
-    ),
-    (
-        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_1, ANY_PROVIDERS),
-        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_2, ANY_PROVIDERS),
-    ),
-    (
-        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"]),
-        (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["local"]),
-    ),
-    (
-        (ConnectionTag.DOCKER_CONE_CLIENT_1, ["local"]),
-        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"]),
-    ),
-    (
-        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ["local"]),
-        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"]),
-    ),
-]
-
-UHP_FAILING_PATHS = [
-    pytest.param(
-        _generate_setup_parameter_pair((a[0], a[1], batch_a), (b[0], b[1], batch_b)),
-    )
-    for (a, b) in UHP_FAILING_PATHS_PARAMS
-    for (batch_a, batch_b) in itertools.product(DISABLED_BATCHING_OPTIONS, repeat=2)
-]
+# fmt: on
 
 
-@pytest.mark.asyncio
-@pytest.mark.long
-@pytest.mark.timeout(timeouts.TEST_DIRECT_FAILING_PATHS_TIMEOUT)
-@pytest.mark.parametrize("setup_params", UHP_FAILING_PATHS)
-# Not sure this is needed. It will only be helpful to catch if any
-# libtelio change would make any of these setup work.
-async def test_direct_failing_paths(setup_params: List[SetupParameters]) -> None:
-    async with AsyncExitStack() as exit_stack:
-        env = await setup_mesh_nodes(exit_stack, setup_params, is_timeout_expected=True)
-        _, beta = env.nodes
-        alpha_client, beta_client = env.clients
-        alpha_connection, _ = [conn.connection for conn in env.connections]
-
-        for server in DERP_SERVERS:
-            await exit_stack.enter_async_context(
-                alpha_client.get_router().break_tcp_conn_to_host(str(server["ipv4"]))
-            )
-            await exit_stack.enter_async_context(
-                beta_client.get_router().break_tcp_conn_to_host(str(server["ipv4"]))
-            )
-
-        await asyncio.gather(
-            alpha_client.wait_for_state_on_any_derp([State.Connecting]),
-            beta_client.wait_for_state_on_any_derp([State.Connecting]),
+async def _ping_between_all_nodes(env: Environment) -> None:
+    await asyncio.gather(*[
+        ping(conn.connection, node.ip_addresses[0])
+        for (client, conn), node in itertools.product(
+            zip(env.clients, env.connections), env.nodes
         )
+        if not client.is_node(node)
+    ])
 
-        with pytest.raises(asyncio.TimeoutError):
-            await ping(alpha_connection, beta.ip_addresses[0], 15)
+
+async def _check_if_true_direct_connection(env: Environment) -> None:
+    async with AsyncExitStack() as temp_exit_stack:
+        await asyncio.gather(*[
+            temp_exit_stack.enter_async_context(
+                client.get_router().break_tcp_conn_to_host(str(server["ipv4"]))
+            )
+            for client, server in itertools.product(env.clients, DERP_SERVERS)
+        ])
+
+        await asyncio.gather(*[
+            client.wait_for_state_on_any_derp([State.Connecting, State.Disconnected])
+            for client in env.clients
+        ])
+
+        await _ping_between_all_nodes(env)
+
+    await asyncio.gather(*[
+        client.wait_for_state_on_any_derp([State.Connected]) for client in env.clients
+    ])
+
+
+@asynccontextmanager
+async def _disable_direct_connection(env: Environment, reflexive_ips: List[str]):
+    async with AsyncExitStack() as temp_exit_stack:
+        await asyncio.gather(*[
+            temp_exit_stack.enter_async_context(
+                client.get_router().disable_path(reflexive_ip)
+            )
+            for client, reflexive_ip in itertools.product(env.clients, reflexive_ips)
+        ])
+
+        await asyncio.gather(*[
+            conn.connection.create_process(["conntrack", "-F"]).execute()
+            for conn in env.connections
+        ])
+
+        yield
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("setup_params, _reflexive_ip", UHP_WORKING_PATHS)
+@pytest.mark.parametrize(
+    "setup_params, reflexive_ips",
+    [
+        pytest.param(
+            *_generate_setup_parameters_with_reflexive_ips(clients),
+        )
+        for clients in UHP_WORKING_PATHS_PARAMS
+    ],
+)
 async def test_direct_working_paths(
-    setup_params: List[SetupParameters],
-    _reflexive_ip: str,
+    setup_params: List[SetupParameters], reflexive_ips: List[str]
 ) -> None:
     async with AsyncExitStack() as exit_stack:
         env = await setup_mesh_nodes(exit_stack, setup_params)
-        _, beta = env.nodes
-        alpha_client, beta_client = env.clients
-        alpha_connection, _ = [conn.connection for conn in env.connections]
 
-        for server in DERP_SERVERS:
-            await exit_stack.enter_async_context(
-                alpha_client.get_router().break_tcp_conn_to_host(str(server["ipv4"]))
+        print("Test direct connection")
+        await _check_if_true_direct_connection(env)
+
+        print("Test direct -> relay -> direct transitions")
+        relay_events = await asyncio.gather(*[
+            exit_stack.enter_async_context(
+                run_async_context(
+                    client.wait_for_event_peer(
+                        node.public_key, [State.Connected], [PathType.Relay]
+                    )
+                )
             )
-            await exit_stack.enter_async_context(
-                beta_client.get_router().break_tcp_conn_to_host(str(server["ipv4"]))
+            for client, node in itertools.product(env.clients, env.nodes)
+            if not client.is_node(node)
+        ])
+
+        direct_events = await asyncio.gather(*[
+            exit_stack.enter_async_context(
+                run_async_context(
+                    client.wait_for_event_peer(
+                        node.public_key, [State.Connected], [PathType.Direct]
+                    )
+                )
+            )
+            for client, node in itertools.product(env.clients, env.nodes)
+            if not client.is_node(node)
+        ])
+
+        async with _disable_direct_connection(env, reflexive_ips):
+            await asyncio.gather(*relay_events)
+            await _ping_between_all_nodes(env)
+
+        await asyncio.gather(*direct_events)
+        await _check_if_true_direct_connection(env)
+
+        print("Test direct connection on short connection loss")
+        possible_relay_events: Dict[Connection, Dict[Node, Any]] = defaultdict(dict)
+        for (client, conn), node in itertools.product(
+            zip(env.clients, env.connections), env.nodes
+        ):
+            if client.is_node(node):
+                continue
+            possible_relay_events[conn.connection][node] = (
+                await exit_stack.enter_async_context(
+                    run_async_context(
+                        client.wait_for_event_peer(
+                            node.public_key, [State.Connected], [PathType.Relay]
+                        )
+                    )
+                )
             )
 
-        await ping(alpha_connection, beta.ip_addresses[0])
+        async with _disable_direct_connection(env, reflexive_ips):
 
-        # LLT-5532: To be cleaned up...
-        alpha_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
-        )
-        beta_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
-        )
+            async def ping_timeout(connection, node):
+                try:
+                    await ping(connection, node.ip_addresses[0], 10)
+                except asyncio.TimeoutError:
+                    pass
+                else:
+                    # if no timeout exception happens, this means, that peers connected through relay
+                    # faster than we expected, but if no relay event occurs, this means, that something
+                    # else was wrong, so we asserts
+                    await asyncio.wait_for(possible_relay_events[connection][node], 1)
+
+            await asyncio.gather(*[
+                ping_timeout(conn.connection, node)
+                for (client, conn), node in itertools.product(
+                    zip(env.clients, env.connections), env.nodes
+                )
+                if not client.is_node(node)
+            ])
+
+        await _ping_between_all_nodes(env)
 
 
 @pytest.mark.moose
@@ -293,11 +252,15 @@ async def test_direct_working_paths(
 @pytest.mark.timeout(
     timeouts.TEST_DIRECT_WORKING_PATHS_ARE_REESTABLISHED_AND_CORRECTLY_REPORTED_IN_ANALYTICS_TIMEOUT
 )
-@pytest.mark.parametrize("setup_params, reflexive_ip", UHP_WORKING_PATHS)
-async def test_direct_working_paths_are_reestablished_and_correctly_reported_in_analytics(
-    setup_params: List[SetupParameters],
-    reflexive_ip: str,
-) -> None:
+async def test_direct_working_paths_are_reestablished_and_correctly_reported_in_analytics() -> (
+    None
+):
+    setup_params = _generate_setup_parameters([
+        (ConnectionTag.DOCKER_UPNP_CLIENT_1, ["upnp"], True),
+        (ConnectionTag.DOCKER_CONE_CLIENT_2, ["stun"], False),
+    ])
+    reflexive_ip = DOCKER_CONE_GW_2_IP
+
     async with AsyncExitStack() as exit_stack:
         for param in setup_params:
             param.features.nurse = Nurse(
@@ -414,7 +377,6 @@ async def test_direct_working_paths_are_reestablished_and_correctly_reported_in_
 
 @pytest.mark.asyncio
 async def test_direct_working_paths_stun_ipv6() -> None:
-    # This test only checks if stun works well with IPv6, no need to add more setups here
     setup_params = [
         SetupParameters(
             connection_tag=conn_tag,
@@ -457,295 +419,84 @@ async def test_direct_working_paths_stun_ipv6() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("setup_params, reflexive_ip", UHP_WORKING_PATHS)
-async def test_direct_short_connection_loss(
-    setup_params: List[SetupParameters], reflexive_ip: str
-) -> None:
-    async with AsyncExitStack() as exit_stack:
-        env = await setup_mesh_nodes(exit_stack, setup_params)
-        _, beta = env.nodes
-        alpha_client, beta_client = env.clients
-        alpha_connection, beta_connection = [
-            conn.connection for conn in env.connections
+async def test_direct_working_paths_with_skip_unresponsive_peers() -> None:
+    # Force shorter unresponsive peer handshake threshold
+    # and adjust wireguard keepalives accordingly too
+    # in order to allow for three packet drops
+    setup_params = [
+        SetupParameters(
+            connection_tag=conn_tag,
+            adapter_type=telio.AdapterType.BoringTun,
+            features=TelioFeatures(
+                direct=Direct(
+                    providers=["stun"],
+                    skip_unresponsive_peers=SkipUnresponsivePeers(
+                        no_rx_threshold_secs=16
+                    ),
+                ),
+                wireguard=Wireguard(
+                    persistent_keepalive=PersistentKeepalive(proxying=5, direct=5)
+                ),
+            ),
+        )
+        for conn_tag in [
+            (ConnectionTag.DOCKER_FULLCONE_CLIENT_1),
+            (ConnectionTag.DOCKER_CONE_CLIENT_1),
+            (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1),
+            (ConnectionTag.DOCKER_FULLCONE_CLIENT_2),
+            (ConnectionTag.DOCKER_CONE_CLIENT_2),
         ]
+    ]
 
-        # Disrupt UHP connection
-        async with AsyncExitStack() as temp_exit_stack:
-            await temp_exit_stack.enter_async_context(
-                alpha_client.get_router().disable_path(reflexive_ip)
-            )
-            # Clear conntrack to make UHP disruption faster
-            await alpha_connection.create_process(["conntrack", "-F"]).execute()
-            await beta_connection.create_process(["conntrack", "-F"]).execute()
-            task = await temp_exit_stack.enter_async_context(
-                run_async_context(
-                    alpha_client.wait_for_event_peer(beta.public_key, [State.Connected])
-                )
-            )
-
-            try:
-                await ping(alpha_connection, beta.ip_addresses[0], 15)
-            except asyncio.TimeoutError:
-                pass
-            else:
-                # if no timeout exception happens, this means, that peers connected through relay
-                # faster than we expected, but if no relay event occurs, this means, that something
-                # else was wrong, so we assert
-                await asyncio.wait_for(task, 1)
-
-        await ping(alpha_connection, beta.ip_addresses[0])
-
-        # LLT-5532: To be cleaned up...
-        alpha_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
-        )
-        beta_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
-        )
-
-
-@pytest.mark.asyncio
-@pytest.mark.long
-@pytest.mark.parametrize("setup_params, reflexive_ip", UHP_WORKING_PATHS)
-async def test_direct_connection_loss_for_infinity(
-    setup_params: List[SetupParameters], reflexive_ip: str
-) -> None:
     async with AsyncExitStack() as exit_stack:
-        env = await setup_mesh_nodes(exit_stack, setup_params)
-        alpha, beta = env.nodes
-        alpha_client, beta_client = env.clients
-        alpha_connection, _ = [conn.connection for conn in env.connections]
-
-        # Break UHP route and wait for relay connection
-        async with AsyncExitStack() as temp_exit_stack:
-            await temp_exit_stack.enter_async_context(
-                alpha_client.get_router().disable_path(reflexive_ip)
-            )
-            task = await temp_exit_stack.enter_async_context(
-                run_async_context(
-                    asyncio.gather(
-                        alpha_client.wait_for_event_peer(
-                            beta.public_key, [State.Connected]
-                        ),
-                        beta_client.wait_for_event_peer(
-                            alpha.public_key, [State.Connected]
-                        ),
-                    )
-                )
-            )
-            try:
-                await ping(alpha_connection, beta.ip_addresses[0], 15)
-            except asyncio.TimeoutError:
-                pass
-            else:
-                # if no timeout exception happens, this means, that peers connected through relay
-                # faster than we expected, but if no relay event occurs, this means, that something
-                # else was wrong, so we assert
-                await asyncio.wait_for(task, 1)
-
-            await task
-
-            await ping(alpha_connection, beta.ip_addresses[0])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("setup_params, _reflexive_ip", UHP_WORKING_PATHS)
-async def test_direct_working_paths_with_skip_unresponsive_peers(
-    setup_params: List[SetupParameters], _reflexive_ip: str
-) -> None:
-    async with AsyncExitStack() as exit_stack:
-        # Force shorter unresponsive peer handshake threshold
-        # and adjust wireguard keepalives accordingly too
-        # in order to allow for three packet drops
-        for param in setup_params:
-            assert param.features.direct is not None
-            param.features.direct.skip_unresponsive_peers = SkipUnresponsivePeers(
-                no_rx_threshold_secs=16
-            )
-            param.features.wireguard = Wireguard(
-                persistent_keepalive=PersistentKeepalive(proxying=5, direct=5)
-            )
-
         env = await setup_mesh_nodes(exit_stack, setup_params)
         api = env.api
-        alpha, beta = env.nodes
-        alpha_client, beta_client = env.clients
-        alpha_connection, _ = [conn.connection for conn in env.connections]
-
-        await ping(alpha_connection, beta.ip_addresses[0])
-
-        await alpha_client.stop_device()
-
-        await beta_client.wait_for_log(
-            f"Skipping sending CMM to peer {alpha.public_key} (Unresponsive)"
+        *_, delta, epsilon = env.nodes
+        alpha_client, beta_client, gamma_client, delta_client, epsilon_client = (
+            env.clients
         )
 
-        await alpha_client.simple_start()
-        await alpha_client.set_meshmap(api.get_meshmap(alpha.id))
+        await _ping_between_all_nodes(env)
 
-        await asyncio.gather(
-            alpha_client.wait_for_state_peer(
-                beta.public_key, [State.Connected], [PathType.Direct]
-            ),
-            beta_client.wait_for_state_peer(
-                alpha.public_key, [State.Connected], [PathType.Direct]
-            ),
-        )
+        await delta_client.stop_device()
+        await epsilon_client.stop_device()
 
-        await ping(alpha_connection, beta.ip_addresses[0])
+        await asyncio.gather(*[
+            running_client.wait_for_log(
+                f"Skipping sending CMM to peer {stopped_node.public_key} (Unresponsive)"
+            )
+            for running_client, stopped_node in itertools.product(
+                [alpha_client, beta_client, gamma_client], [delta, epsilon]
+            )
+        ])
+
+        await delta_client.simple_start()
+        await epsilon_client.simple_start()
+        await delta_client.set_meshmap(api.get_meshmap(delta.id))
+        await epsilon_client.set_meshmap(api.get_meshmap(epsilon.id))
+
+        await asyncio.gather(*[
+            client.wait_for_state_peer(
+                node.public_key, [State.Connected], [PathType.Direct]
+            )
+            for client, node in itertools.product(env.clients, env.nodes)
+            if not client.is_node(node)
+        ])
+
+        await _ping_between_all_nodes(env)
 
         # This is expected. Alpha client can still receive messages from
         # the previous session from beta after the restart.
         alpha_client.allow_errors(["boringtun::device.*Decapsulate error"])
 
-        # LLT-5532: To be cleaned up...
-        alpha_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
-        )
-        beta_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
-        )
-
-
-ENDPOINT_GONE_PARAMS = [
-    (
-        (ConnectionTag.DOCKER_CONE_CLIENT_1, ["stun"]),
-        (ConnectionTag.DOCKER_CONE_CLIENT_2, ["stun"]),
-    ),
-    (
-        (ConnectionTag.DOCKER_UPNP_CLIENT_1, ["upnp"]),
-        (ConnectionTag.DOCKER_UPNP_CLIENT_2, ["upnp"]),
-    ),
-    (
-        (ConnectionTag.DOCKER_UPNP_CLIENT_1, ["upnp"]),
-        (ConnectionTag.DOCKER_CONE_CLIENT_2, ["stun"]),
-    ),
-    (
-        (ConnectionTag.DOCKER_UPNP_CLIENT_1, ["upnp"]),
-        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"]),
-    ),
-    (
-        (ConnectionTag.DOCKER_CONE_CLIENT_1, ["stun"]),
-        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"]),
-    ),
-]
-
-
-@pytest.mark.timeout(timeouts.TEST_DIRECT_CONNECTION_ENDPOINT_GONE)
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "setup_params",
-    [
-        pytest.param(
-            _generate_setup_parameter_pair((a[0], a[1], batch_a), (b[0], b[1], batch_b))
-        )
-        for (a, b) in ENDPOINT_GONE_PARAMS
-        for (batch_a, batch_b) in itertools.product(DISABLED_BATCHING_OPTIONS, repeat=2)
-    ],
-)
-async def test_direct_connection_endpoint_gone(
-    setup_params: List[SetupParameters],
-) -> None:
-    async with AsyncExitStack() as exit_stack:
-        env = await setup_mesh_nodes(exit_stack, setup_params)
-        alpha, beta = env.nodes
-        alpha_client, beta_client = env.clients
-        alpha_connection, _ = [conn.connection for conn in env.connections]
-
-        async def _check_if_true_direct_connection() -> None:
-            async with AsyncExitStack() as temp_exit_stack:
-                for derp in DERP_SERVERS:
-                    await temp_exit_stack.enter_async_context(
-                        alpha_client.get_router().break_tcp_conn_to_host(
-                            str(derp["ipv4"])
-                        )
-                    )
-                    await temp_exit_stack.enter_async_context(
-                        beta_client.get_router().break_tcp_conn_to_host(
-                            str(derp["ipv4"])
-                        )
-                    )
-
-                await asyncio.gather(
-                    alpha_client.wait_for_state_on_any_derp(
-                        [State.Connecting, State.Disconnected]
-                    ),
-                    beta_client.wait_for_state_on_any_derp(
-                        [State.Connecting, State.Disconnected]
-                    ),
-                )
-
-                await ping(alpha_connection, beta.ip_addresses[0])
-
-        await _check_if_true_direct_connection()
-
-        await asyncio.gather(
-            alpha_client.wait_for_state_on_any_derp([State.Connected]),
-            beta_client.wait_for_state_on_any_derp([State.Connected]),
-        )
-
-        async with AsyncExitStack() as temp_exit_stack:
-            await temp_exit_stack.enter_async_context(
-                alpha_client.get_router().disable_path(
-                    alpha_client.get_endpoint_address(beta.public_key)
-                )
-            )
-            await temp_exit_stack.enter_async_context(
-                beta_client.get_router().disable_path(
-                    beta_client.get_endpoint_address(alpha.public_key)
-                )
-            )
-
-            await asyncio.gather(
-                alpha_client.wait_for_state_peer(beta.public_key, [State.Connected]),
-                beta_client.wait_for_state_peer(alpha.public_key, [State.Connected]),
-            )
-
-            await ping(alpha_connection, beta.ip_addresses[0])
-
-        await asyncio.gather(
-            alpha_client.wait_for_state_peer(
-                beta.public_key, [State.Connected], [PathType.Direct]
-            ),
-            beta_client.wait_for_state_peer(
-                alpha.public_key, [State.Connected], [PathType.Direct]
-            ),
-        )
-
-        await _check_if_true_direct_connection()
-
-        # This is expected. Clients can still receive messages from
-        # the previous sessions.
-        alpha_client.allow_errors(["boringtun::device.*Decapsulate error"])
-        beta_client.allow_errors([
-            "boringtun::device.*Decapsulate error",
-        ])
-
-        # LLT-5532: To be cleaned up...
-        alpha_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
-        )
-        beta_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
-        )
-
 
 @pytest.mark.asyncio
 # Regression test for LLT-4306
-@pytest.mark.parametrize(
-    "setup_params",
-    [
-        pytest.param(
-            _generate_setup_parameter_pair((a[0], a[1], batch_a), (b[0], b[1], batch_b))
-        )
-        for (a, b) in [(
-            (ConnectionTag.DOCKER_CONE_CLIENT_1, ["stun"]),
-            (ConnectionTag.DOCKER_CONE_CLIENT_2, ["stun"]),
-        )]
-        for (batch_a, batch_b) in itertools.product(DISABLED_BATCHING_OPTIONS, repeat=2)
-    ],
-)
-async def test_infinite_stun_loop(setup_params: List[SetupParameters]) -> None:
+async def test_direct_infinite_stun_loop() -> None:
+    setup_params = _generate_setup_parameters([
+        (ConnectionTag.DOCKER_CONE_CLIENT_1, ["stun"], True),
+        (ConnectionTag.DOCKER_CONE_CLIENT_2, ["stun"], False),
+    ])
     async with AsyncExitStack() as exit_stack:
         env = await setup_mesh_nodes(exit_stack, setup_params)
         alpha_client, _ = env.clients
@@ -785,13 +536,21 @@ async def test_infinite_stun_loop(setup_params: List[SetupParameters]) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("setup_params, _reflexive_ip", UHP_WORKING_PATHS)
-async def test_direct_working_paths_with_pausing_upnp_and_stun(
-    setup_params: List[SetupParameters], _reflexive_ip: str
-) -> None:
+async def test_direct_working_paths_with_pausing_upnp_and_stun() -> None:
+    setup_params = _generate_setup_parameters([
+        (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["stun"], True),
+        (ConnectionTag.DOCKER_FULLCONE_CLIENT_2, ["stun"], False),
+        (ConnectionTag.DOCKER_CONE_CLIENT_1, ["stun"], True),
+        (ConnectionTag.DOCKER_CONE_CLIENT_2, ["stun"], False),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["stun"], True),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_2, ["stun"], False),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_DUAL_STACK, ["stun"], False),
+        (ConnectionTag.DOCKER_UPNP_CLIENT_1, ["upnp"], True),
+        (ConnectionTag.DOCKER_UPNP_CLIENT_2, ["upnp"], False),
+    ])
+
     async with AsyncExitStack() as exit_stack:
-        stun_enabled = False
-        upnp_enabled = False
+        providers: List[List[str]] = []
         for param in setup_params:
             assert param.features.direct is not None
             param.features.direct.endpoint_providers_optimization = (
@@ -800,53 +559,43 @@ async def test_direct_working_paths_with_pausing_upnp_and_stun(
                     optimize_direct_upgrade_upnp=True,
                 )
             )
-
-            if (
-                param.features.direct.providers is not None
-                and "stun" in param.features.direct.providers
-            ):
-                stun_enabled = True
-
-            if (
-                param.features.direct.providers is not None
-                and "upnp" in param.features.direct.providers
-            ):
-                upnp_enabled = True
+            assert param.features.direct.providers is not None
+            providers.append(param.features.direct.providers)
 
         env = await setup_mesh_nodes(exit_stack, setup_params)
-        _, beta = env.nodes
-        alpha_client, beta_client = env.clients
-        alpha_connection, _ = [conn.connection for conn in env.connections]
 
-        await ping(alpha_connection, beta.ip_addresses[0])
+        await _ping_between_all_nodes(env)
 
-        # wait for upnp and stun to be paused
+        await asyncio.gather(*[
+            (
+                client.wait_for_log(
+                    "Skipping getting endpoint via STUN endpoint provider(ModulePaused)"
+                )
+                if "stun" in provider
+                else client.wait_for_log(
+                    "Skipping getting endpoint via UPNP endpoint provider(ModulePaused)"
+                )
+            )
+            for client, provider in zip(env.clients, providers)
+        ])
+
+        tcpdumps = await asyncio.gather(*[
+            exit_stack.enter_async_context(
+                conn.connection.create_process([
+                    "tcpdump",
+                    "--immediate-mode",
+                    "-l",
+                    "-i",
+                    "any",
+                ]).run()
+            )
+            for conn in env.connections
+        ])
         await asyncio.sleep(5)
 
-        if stun_enabled:
-            await alpha_client.wait_for_log(
-                "Skipping getting endpoint via STUN endpoint provider(ModulePaused)"
-            )
-        if upnp_enabled:
-            await alpha_client.wait_for_log(
-                "Skipping getting endpoint via UPNP endpoint provider(ModulePaused)"
-            )
-
-        tcpdump = await exit_stack.enter_async_context(
-            alpha_connection.create_process([
-                "tcpdump",
-                "--immediate-mode",
-                "-l",
-                "-i",
-                "any",
-            ]).run()
+        packets = itertools.chain.from_iterable(
+            tcpdump.get_stdout().splitlines() for tcpdump in tcpdumps
         )
-        await asyncio.sleep(5)
-
-        packets = tcpdump.get_stdout().splitlines()
-        # There seems to be some delay when getting stdout from a process
-        # Without this delay, `stun_requests` is empty even if tcpdump reports traffic
-        await asyncio.sleep(0.5)
 
         # filter outgoing stun packets by ports 3478/3479
         # filter upnp igd request packets by ip (ssdp multicast ip)
@@ -861,10 +610,79 @@ async def test_direct_working_paths_with_pausing_upnp_and_stun(
 
         assert len(stun_upnp_requests) == 0
 
-        # LLT-5532: To be cleaned up...
-        alpha_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
+
+UHP_FAILING_PATHS_PARAMS = [
+    [
+        (ConnectionTag.DOCKER_CONE_CLIENT_1, ANY_PROVIDERS, False),
+        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ANY_PROVIDERS, False),
+    ],
+    [
+        (ConnectionTag.DOCKER_CONE_CLIENT_1, ANY_PROVIDERS, False),
+        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_1, ANY_PROVIDERS, False),
+    ],
+    [
+        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ANY_PROVIDERS, False),
+        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_2, ANY_PROVIDERS, False),
+    ],
+    [
+        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ANY_PROVIDERS, False),
+        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_1, ANY_PROVIDERS, False),
+    ],
+    [
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ANY_PROVIDERS, False),
+        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_1, ANY_PROVIDERS, False),
+    ],
+    [
+        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_1, ANY_PROVIDERS, False),
+        (ConnectionTag.DOCKER_UDP_BLOCK_CLIENT_2, ANY_PROVIDERS, False),
+    ],
+    [
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"], False),
+        (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, ["local"], False),
+    ],
+    [
+        (ConnectionTag.DOCKER_CONE_CLIENT_1, ["local"], False),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"], False),
+    ],
+    [
+        (ConnectionTag.DOCKER_SYMMETRIC_CLIENT_1, ["local"], False),
+        (ConnectionTag.DOCKER_OPEN_INTERNET_CLIENT_1, ["local"], False),
+    ],
+]
+
+UHP_FAILING_PATHS = [
+    pytest.param(
+        _generate_setup_parameters(clients),
+    )
+    for clients in UHP_FAILING_PATHS_PARAMS
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.long
+@pytest.mark.timeout(timeouts.TEST_DIRECT_FAILING_PATHS_TIMEOUT)
+@pytest.mark.parametrize("setup_params", UHP_FAILING_PATHS)
+# Not sure this is needed. It will only be helpful to catch if any
+# libtelio change would make any of these setup work.
+async def test_direct_failing_paths(setup_params: List[SetupParameters]) -> None:
+    async with AsyncExitStack() as exit_stack:
+        env = await setup_mesh_nodes(exit_stack, setup_params, is_timeout_expected=True)
+        _, beta = env.nodes
+        alpha_client, beta_client = env.clients
+        alpha_connection, _ = [conn.connection for conn in env.connections]
+
+        for server in DERP_SERVERS:
+            await exit_stack.enter_async_context(
+                alpha_client.get_router().break_tcp_conn_to_host(str(server["ipv4"]))
+            )
+            await exit_stack.enter_async_context(
+                beta_client.get_router().break_tcp_conn_to_host(str(server["ipv4"]))
+            )
+
+        await asyncio.gather(
+            alpha_client.wait_for_state_on_any_derp([State.Connecting]),
+            beta_client.wait_for_state_on_any_derp([State.Connecting]),
         )
-        beta_client.allow_errors(
-            ["telio_proxy::proxy.*Unable to send. WG Address not available"]
-        )
+
+        with pytest.raises(asyncio.TimeoutError):
+            await ping(alpha_connection, beta.ip_addresses[0], 15)
