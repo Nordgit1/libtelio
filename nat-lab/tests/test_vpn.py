@@ -480,6 +480,15 @@ async def test_kill_external_tcp_conn_on_vpn_reconnect(
                 features=TelioFeatures(firewall=Firewall(boringtun_reset_conns=True)),
             )
         ),
+        pytest.param(
+            SetupParameters(
+                connection_tag=ConnectionTag.MAC_VM,
+                adapter_type=AdapterType.BoringTun,
+                ip_stack=IPStack.IPv4,
+                features=TelioFeatures(firewall=Firewall(boringtun_reset_conns=True)),
+            ),
+            marks=pytest.mark.mac,
+        ),
         # TODO(msz): IPv6 public server, it doesn't work with the current VPN implementation
         # pytest.param(
         #     SetupParameters(
