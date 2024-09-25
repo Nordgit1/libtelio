@@ -208,6 +208,16 @@ impl BytesAndTimestamps {
     }
 }
 
+/// Structure stores pair of timestamps for egress and ingress data for any peer activity
+#[derive(Copy, Clone, Debug)]
+pub struct TxRxTimestampPair {
+    /// Latest timestamps for egress data towards any peer
+    pub tx_ts: Instant,
+
+    /// Latest timestamp for ingress data from any peer
+    pub rx_ts: Instant,
+}
+
 struct State {
     #[cfg(unix)]
     cfg: Config,
@@ -227,7 +237,7 @@ struct State {
     libtelio_event: Option<mc_chan::Tx<Box<LibtelioEvent>>>,
 
     stats: HashMap<PublicKey, Arc<Mutex<BytesAndTimestamps>>>,
-
+    latest_peer_network_activity: Option<TxRxTimestampPair>,
     ip_stack: Option<IpStack>,
 }
 
@@ -362,6 +372,7 @@ impl DynamicWg {
                 libtelio_event: io.libtelio_wide_event_publisher,
                 stats: HashMap::new(),
                 ip_stack: None,
+                latest_peer_network_activity: Default::default(),
             }),
         }
     }
@@ -388,6 +399,18 @@ impl DynamicWg {
         } else {
             Err(Error::RestartFailed)
         }
+    }
+
+    /// Retrieves latest tx/rx change accross all the nodes. Essentially showing the time of last
+    /// egress or ingress activity
+    pub async fn get_latest_peer_network_activity(
+        &self,
+    ) -> Result<Option<TxRxTimestampPair>, Error> {
+        Ok(task_exec!(
+            &self.task,
+            async move |s| Ok(s.latest_peer_network_activity)
+        )
+        .await?)
     }
 }
 
@@ -786,10 +809,16 @@ impl State {
 
                 if let Some(stats) = self.stats.get_mut(key) {
                     match stats.lock().as_mut() {
-                        Ok(s) => s.update(
-                            new.rx_bytes.unwrap_or_default(),
-                            new.tx_bytes.unwrap_or_default(),
-                        ),
+                        // POI
+                        Ok(s) => {
+                            s.update(
+                                new.rx_bytes.unwrap_or_default(),
+                                new.tx_bytes.unwrap_or_default(),
+                            );
+
+                            s.get_rx_ts();
+                            s.get_tx_ts();
+                        }
                         Err(e) => {
                             telio_log_error!("poisoned lock - {}", e);
                         }

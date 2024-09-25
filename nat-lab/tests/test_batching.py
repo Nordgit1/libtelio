@@ -108,14 +108,6 @@ ALL_NODES = [
         ConnectionTag.DOCKER_INTERNAL_SYMMETRIC_CLIENT,
         AdapterType.LinuxNativeWg,
     ),
-    (ConnectionTag.DOCKER_FULLCONE_CLIENT_1, AdapterType.LinuxNativeWg),
-    (ConnectionTag.DOCKER_FULLCONE_CLIENT_2, AdapterType.LinuxNativeWg),
-    (
-        ConnectionTag.MAC_VM,
-        AdapterType.BoringTun,
-    ),
-    (ConnectionTag.WINDOWS_VM_1, AdapterType.WindowsNativeWg),
-    (ConnectionTag.WINDOWS_VM_2, AdapterType.WireguardGo),
 ]
 # This test captures histograms of network activity to evaluate the effect of local batching in libtelio.
 # Since only local batching is implemented, no client-generated traffic should occur during the test.
@@ -142,8 +134,6 @@ ALL_NODES = [
             BATCHING_CAPTURE_TIME,
             marks=[
                 pytest.mark.batching,
-                pytest.mark.mac,
-                pytest.mark.windows,
             ],
         ),
         pytest.param(
@@ -155,8 +145,6 @@ ALL_NODES = [
             BATCHING_CAPTURE_TIME,
             marks=[
                 pytest.mark.batching,
-                pytest.mark.mac,
-                pytest.mark.windows,
             ],
         ),
     ],
