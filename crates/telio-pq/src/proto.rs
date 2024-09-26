@@ -158,6 +158,7 @@ async fn handshake(
     secret: &telio_crypto::SecretKey,
     peers_pubkey: &telio_crypto::PublicKey,
 ) -> super::Result<TunnelSock> {
+    telio_log_debug!("handshake");
     let sock = sock_pool
         .new_external_udp((Ipv4Addr::UNSPECIFIED, 0), None)
         .await?;
@@ -205,6 +206,7 @@ async fn handshake(
 }
 
 pub fn parse_get_response(pkgbuf: &[u8]) -> super::Result<kyber768::Ciphertext> {
+    telio_log_debug!("parse_get_response");
     let ip = Ipv4Packet::new(pkgbuf).ok_or(io::Error::new(
         io::ErrorKind::InvalidData,
         "Invalid PQ keys IP packet received",
@@ -228,6 +230,7 @@ pub fn parse_get_response(pkgbuf: &[u8]) -> super::Result<kyber768::Ciphertext> 
 ///  Ciphertext bytes  , [u8]
 /// ---------------------------------
 pub fn parse_response_payload(payload: &[u8]) -> super::Result<kyber768::Ciphertext> {
+    telio_log_debug!("parse_response_payload");
     let mut data = io::Cursor::new(payload);
 
     let mut version = [0u8; 4];
@@ -269,6 +272,7 @@ fn create_get_packet(
     pq_public: &kyber768::PublicKey,
     rng: &mut impl rand::Rng,
 ) -> Vec<u8> {
+    telio_log_debug!("create_get_packet");
     let mut pkgbuf = Vec::with_capacity(1024 * 4); // 4 KiB
     pkgbuf.resize(IPV4_HEADER_LEN + UDP_HEADER_LEN, 0);
 
@@ -321,6 +325,7 @@ fn push_get_method_udp_payload_without_auth_tag(
     wg_public: &telio_crypto::PublicKey,
     pq_public: &kyber768::PublicKey,
 ) {
+    telio_log_debug!("push_get_method_udp_payload_without_auth_tag");
     let method = 0u32; // get
     let timestamp: u64 = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -345,6 +350,7 @@ fn push_get_method_udp_payload_without_auth_tag(
 ///  method            , u32le, = 1
 /// ---------------------------------
 fn push_rekey_method_udp_payload(pkgbuf: &mut Vec<u8>) {
+    telio_log_debug!("push_rekey_method_udp_payload");
     let method = 1u32; // rekey
 
     // UDP packet payload
@@ -358,9 +364,9 @@ fn push_rekey_method_udp_payload(pkgbuf: &mut Vec<u8>) {
 ///
 /// Panics if the buffer size is less than IP + UDP headers bytes.
 fn fill_get_packet_headers(pkgbuf: &mut [u8], rng: &mut impl rand::Rng) {
+    telio_log_debug!("fill_get_packet_headers");
     let pkg_len = pkgbuf.len();
 
-    telio_log_debug!("fill_get_packet_headers");
     telio_log_debug!("pkg_len: {} IPV4_HEADER_LEN: {}", pkg_len, IPV4_HEADER_LEN);
 
     telio_log_debug!("udppkg");
@@ -398,6 +404,7 @@ fn fill_get_packet_headers(pkgbuf: &mut [u8], rng: &mut impl rand::Rng) {
 }
 
 fn random_port(rng: &mut impl rand::Rng) -> u16 {
+    telio_log_debug!("random_port");
     rand::distributions::Uniform::new_inclusive(LOCAL_PORT_RANGE.start(), LOCAL_PORT_RANGE.end())
         .sample(rng)
 }
