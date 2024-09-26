@@ -360,6 +360,10 @@ fn push_rekey_method_udp_payload(pkgbuf: &mut Vec<u8>) {
 fn fill_get_packet_headers(pkgbuf: &mut [u8], rng: &mut impl rand::Rng) {
     let pkg_len = pkgbuf.len();
 
+    telio_log_debug!("fill_get_packet_headers");
+    telio_log_debug!("pkg_len: {} IPV4_HEADER_LEN: {}", pkg_len, IPV4_HEADER_LEN);
+
+    telio_log_debug!("udppkg");
     #[allow(clippy::expect_used)]
     #[allow(index_access_check)]
     let mut udppkg = MutableUdpPacket::new(&mut pkgbuf[IPV4_HEADER_LEN..])
@@ -372,8 +376,11 @@ fn fill_get_packet_headers(pkgbuf: &mut [u8], rng: &mut impl rand::Rng) {
         &LOCAL_IP,
         &REMOTE_IP,
     ));
+    telio_log_debug!("udppkg {:#?}", udppkg);
     drop(udppkg);
+    telio_log_debug!("drop(udppkg)");
 
+    telio_log_debug!("ippkg");
     #[allow(clippy::expect_used)]
     #[allow(index_access_check)]
     let mut ippkg = MutableIpv4Packet::new(&mut pkgbuf[..IPV4_HEADER_LEN])
@@ -387,6 +394,7 @@ fn fill_get_packet_headers(pkgbuf: &mut [u8], rng: &mut impl rand::Rng) {
     ippkg.set_source(LOCAL_IP);
     ippkg.set_destination(REMOTE_IP);
     ippkg.set_checksum(ipv4::checksum(&ippkg.to_immutable()));
+    telio_log_debug!("ippkg {:#?}", ippkg);
 }
 
 fn random_port(rng: &mut impl rand::Rng) -> u16 {
