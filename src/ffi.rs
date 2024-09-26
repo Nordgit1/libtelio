@@ -602,6 +602,7 @@ impl Telio {
             allowed_ips,
             endpoint,
         };
+        telio_log_debug!("!!!!! catch_ffi_panic");
         catch_ffi_panic(|| {
             self.device_op(true, |dev| {
                 dev.connect_exit_node(&node)
