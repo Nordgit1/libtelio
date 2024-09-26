@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::{collections::HashMap, sync::Arc};
 
-use telio_utils::{telio_log_debug, telio_log_error, telio_log_warn};
+use telio_utils::{telio_log_debug, telio_log_warn};
 use tokio;
 use tokio::time::sleep_until;
 
