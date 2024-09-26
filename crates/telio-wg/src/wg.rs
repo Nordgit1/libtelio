@@ -44,6 +44,26 @@ use std::{
     time::Duration,
 };
 
+/// Interface for retrieving stats about network activity
+#[async_trait]
+pub trait ActivityRecorder: Sync + Send {
+    /// Retrieve global peer network activity timestamps
+    async fn get_latest_peer_network_activity(&self) -> Result<Option<TxRxTimestampPair>, Error>;
+}
+
+#[async_trait]
+impl ActivityRecorder for DynamicWg {
+    /// Retrieves latest tx/rx change accross all the nodes. Essentially showing the time of last
+    /// egress or ingress activity
+    async fn get_latest_peer_network_activity(&self) -> Result<Option<TxRxTimestampPair>, Error> {
+        Ok(task_exec!(
+            &self.task,
+            async move |s| Ok(s.latest_peer_network_activity)
+        )
+        .await?)
+    }
+}
+
 /// WireGuard adapter interface
 #[cfg_attr(any(test, feature = "mockall"), mockall::automock)]
 #[async_trait]
@@ -399,18 +419,6 @@ impl DynamicWg {
         } else {
             Err(Error::RestartFailed)
         }
-    }
-
-    /// Retrieves latest tx/rx change accross all the nodes. Essentially showing the time of last
-    /// egress or ingress activity
-    pub async fn get_latest_peer_network_activity(
-        &self,
-    ) -> Result<Option<TxRxTimestampPair>, Error> {
-        Ok(task_exec!(
-            &self.task,
-            async move |s| Ok(s.latest_peer_network_activity)
-        )
-        .await?)
     }
 }
 

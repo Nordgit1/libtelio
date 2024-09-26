@@ -16,7 +16,7 @@ use telio_task::{task_exec, BoxAction, Runtime, Task};
 use telio_utils::{
     dual_target, repeated_actions, telio_log_debug, telio_log_warn, DualTarget, RepeatedActions,
 };
-use telio_wg::DynamicWg;
+use telio_wg::{ActivityRecorder, DynamicWg};
 const PING_PAYLOAD_SIZE: usize = 56;
 
 /// Possible [SessionKeeper] errors.
@@ -63,7 +63,10 @@ pub struct SessionKeeper {
 }
 
 impl SessionKeeper {
-    pub fn start(sock_pool: Arc<SocketPool>, wg: Option<Arc<DynamicWg>>) -> Result<Self> {
+    pub fn start(
+        sock_pool: Arc<SocketPool>,
+        activity_recorder: Option<Arc<dyn ActivityRecorder>>,
+    ) -> Result<Self> {
         let (client_v4, client_v6) = (
             PingerClient::new(&Self::make_builder(ICMP::V4).build())
                 .map_err(|e| Error::PingerCreationError(ICMP::V4, e))?,
@@ -82,7 +85,7 @@ impl SessionKeeper {
                 },
                 batched_actions: Batcher::new(),
                 nonbatched_actions: RepeatedActions::default(),
-                wg,
+                wg: activity_recorder,
                 last_tx_ts: None,
                 last_rx_ts: None,
             }),
@@ -268,7 +271,7 @@ struct State {
     pingers: Pingers,
     batched_actions: Batcher<PublicKey, Self>,
     nonbatched_actions: RepeatedActions<PublicKey, Self, Result<()>>,
-    wg: Option<Arc<DynamicWg>>,
+    wg: Option<Arc<dyn ActivityRecorder>>,
     last_tx_ts: Option<tokio::time::Instant>,
     last_rx_ts: Option<tokio::time::Instant>,
 }
