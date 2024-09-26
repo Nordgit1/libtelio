@@ -234,13 +234,16 @@ struct State {
 const POLL_MILLIS: u64 = 1000;
 const MAX_UAPI_FAIL_COUNT: i32 = 10;
 
-#[cfg(all(windows))]
+#[cfg(all(not(test), windows))]
 const DEFAULT_NAME: &str = "NordLynx";
 
-#[cfg(all(any(target_os = "macos", target_os = "ios", target_os = "tvos")))]
+#[cfg(all(
+    not(test),
+    any(target_os = "macos", target_os = "ios", target_os = "tvos")
+))]
 const DEFAULT_NAME: &str = "utun10";
 
-#[cfg(all(any(target_os = "linux", target_os = "android")))]
+#[cfg(all(not(test), any(target_os = "linux", target_os = "android")))]
 const DEFAULT_NAME: &str = "nlx0";
 
 impl DynamicWg {
@@ -360,7 +363,7 @@ impl DynamicWg {
         }
     }
 
-    //#[cfg(not(any(test, feature = "test-adapter")))]
+    #[cfg(not(test))]
     fn start_adapter(cfg: Config) -> Result<Box<dyn Adapter>, Error> {
         adapter::start(
             cfg.adapter,
@@ -373,16 +376,16 @@ impl DynamicWg {
         )
     }
 
-    //#[cfg(any(test, feature = "test-adapter"))]
-    //fn start_adapter(_cfg: Config) -> Result<Box<dyn Adapter>, Error> {
-    //    use std::sync::Mutex;
-    //
-    //    if let Some(adapter) = tests::RUNTIME_ADAPTER.lock().unwrap().take() {
-    //        Ok(adapter)
-    //    } else {
-    //        Err(Error::RestartFailed)
-    //    }
-    //}
+    #[cfg(test)]
+    fn start_adapter(_cfg: Config) -> Result<Box<dyn Adapter>, Error> {
+        use std::sync::Mutex;
+
+        if let Some(adapter) = tests::RUNTIME_ADAPTER.lock().unwrap().take() {
+            Ok(adapter)
+        } else {
+            Err(Error::RestartFailed)
+        }
+    }
 }
 
 #[async_trait]
@@ -1048,7 +1051,7 @@ impl Runtime for State {
     }
 }
 
-#[cfg(any(test, feature = "test-adapter"))]
+#[cfg(test)]
 #[allow(missing_docs)]
 pub mod tests {
     use std::{
@@ -1073,7 +1076,7 @@ pub mod tests {
 
     lazy_static! {
         pub(super) static ref RUNTIME_ADAPTER: StdMutex<Option<Box<dyn Adapter>>> =
-            StdMutex::new(Some(Box::new(MockAdapter::new())));
+            StdMutex::new(None);
     }
 
     fn random_interface() -> Interface {

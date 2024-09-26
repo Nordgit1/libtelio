@@ -4068,7 +4068,7 @@ dependencies = [
  "dirs",
  "futures",
  "hex",
- "interprocess",
+ "interprocess 1.2.1",
  "ipnet",
  "parking_lot",
  "rand",
