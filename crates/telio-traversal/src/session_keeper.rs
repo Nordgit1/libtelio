@@ -85,7 +85,7 @@ impl SessionKeeper {
                 },
                 batched_actions: Batcher::new(),
                 nonbatched_actions: RepeatedActions::default(),
-                wg: activity_recorder,
+                activity_recorder,
                 last_tx_ts: None,
                 last_rx_ts: None,
             }),
@@ -271,7 +271,7 @@ struct State {
     pingers: Pingers,
     batched_actions: Batcher<PublicKey, Self>,
     nonbatched_actions: RepeatedActions<PublicKey, Self, Result<()>>,
-    wg: Option<Arc<dyn ActivityRecorder>>,
+    activity_recorder: Option<Arc<dyn ActivityRecorder>>,
     last_tx_ts: Option<tokio::time::Instant>,
     last_rx_ts: Option<tokio::time::Instant>,
 }
@@ -285,21 +285,26 @@ impl Runtime for State {
     where
         F: Future<Output = BoxAction<Self, std::result::Result<(), Self::Err>>> + Send,
     {
-        let mut dirty_tx = false;
-        let mut dirty_rx = false;
+        let mut tx_has_changed = false;
+        let mut rx_has_changed = false;
 
-        if let Some(wg) = self.wg.as_ref() {
+        // we're just interested in last timestamps for the change. We do not discriminate by the
+        // peer. Any activity towards or from the peer is considered a green light.
+        if let Some(wg) = self.activity_recorder.as_ref() {
             if let Ok(Some(timestamps)) = wg.get_latest_peer_network_activity().await {
-                // Use `map_or` to simplify the logic for dirty_tx and dirty_rx
-                dirty_tx = self.last_tx_ts.map_or(true, |ts| timestamps.tx_ts != ts);
+                println!(
+                    "Lets check! {:?} and {:?} vs {:?}",
+                    self.last_rx_ts, self.last_tx_ts, timestamps
+                );
+                tx_has_changed = self.last_tx_ts.map_or(false, |ts| timestamps.tx_ts != ts);
                 self.last_tx_ts = Some(timestamps.tx_ts);
 
-                dirty_rx = self.last_rx_ts.map_or(true, |ts| timestamps.rx_ts != ts);
+                rx_has_changed = self.last_rx_ts.map_or(false, |ts| timestamps.rx_ts != ts);
                 self.last_rx_ts = Some(timestamps.rx_ts);
             }
         }
 
-        if dirty_tx || dirty_rx {
+        if tx_has_changed || rx_has_changed {
             self.batched_actions.trigger();
         }
 

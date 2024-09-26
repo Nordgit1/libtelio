@@ -10,20 +10,24 @@ use tokio::time::sleep_until;
 type Action<V, R = std::result::Result<(), ()>> =
     Arc<dyn for<'a> Fn(&'a mut V) -> BoxFuture<'a, R> + Sync + Send>;
 
-/// How long do we care about trigger after it happened
-const TRIGGER_EFFECTIVE_TIME: tokio::time::Duration = tokio::time::Duration::from_secs(5);
+/// When batcher is evaluating actions, how far in the past the triggered signal should be taken into an effect
+const TRIGGER_EFFECTIVE_DURATION: tokio::time::Duration = tokio::time::Duration::from_secs(5);
 
-/// Trigger logic throttle. if properly managed, trigger should not be working sonner than
-/// TRIGGER_EFFECTIVE_TIME.
+/// Trigger logic throttle value, for safety.
 const TRIGGER_SAFETY_THROTTLE: tokio::time::Duration = tokio::time::Duration::from_secs(2);
 
+/// Batcher works by being queried for actions to get. An explicit call is needed to go into the
+/// polling state to execute the actions.
 pub struct Batcher<K, V> {
     actions: HashMap<K, (BatchEntry, Action<V>)>,
+
+    /// If while polling a new peer is added, batcher needs to
+    /// handle that and does so through a `notify_add` notification. Peers deadline is set to
+    /// immediate, so no timestamp keeping is required, the future will immediately resolve
     notify_add: tokio::sync::Notify,
 
-    /// Used in safety check to check if batcher doesn't trigger internally too often.
-    /// Option<Insatnt> would be a nicer choice but it leaves a possibility of None not being
-    /// handled by accident.
+    // If while polling triggering happens, a notification is issued, else timestamp is stored to
+    // detect the trigger.
     notify_trigger_last_timestamp: tokio::time::Instant,
     notify_trigger_timestamp: Option<tokio::time::Instant>,
     notify_trigger: tokio::sync::Notify,
@@ -72,7 +76,7 @@ where
                 let mut triggered = false;
                 {
                     if let Some(trig_ts) = self.notify_trigger_timestamp {
-                        if tokio::time::Instant::now() - trig_ts < TRIGGER_EFFECTIVE_TIME {
+                        if tokio::time::Instant::now() - trig_ts < TRIGGER_EFFECTIVE_DURATION {
                             self.notify_trigger_timestamp = None;
                             triggered = true;
                         }
@@ -111,7 +115,6 @@ where
                 }
 
                 let now = tokio::time::Instant::now();
-                // at this point in time we know we're at the earliest spot for batching, thus we can check if we have more actions to add
                 for (key, action) in actions.iter_mut() {
                     let adjusted_action_deadline = now + action.0.threshold;
 
@@ -127,7 +130,6 @@ where
                 // trigger a tight loop
                 tokio::select! {
                     _ = self.notify_add.notified() => {}
-                    _ = self.notify_trigger.notified() => {}
                 }
             }
         }
@@ -138,10 +140,8 @@ where
         self.actions.remove(key);
     }
 
-    /// Trigger batcher manually. Triggering will batch the events and given a big threshold
-    /// it will always find something to batch. This means that if signal threshold is bigger than
-    /// the interval of the signal and trigger is called in a tight loop it will spam the batcher
-    /// callback.
+    /// Trigger batcher manually. Triggering will try to batch the events at the a given time. It
+    /// doesn't mean it will find anything to batch if a proper threshold is set.
     pub fn trigger(&mut self) {
         telio_log_debug!("triggering batcher");
         self.notify_trigger_timestamp = Some(tokio::time::Instant::now());

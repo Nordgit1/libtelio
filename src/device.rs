@@ -1840,7 +1840,6 @@ impl Runtime {
 
             // Update configuration for DERP client
             meshnet_entities.derp.configure(Some(derp_config)).await;
-            // TODO: POI here we set sessionekeeper through direct field and such
             // Refresh the lists of servers for STUN endpoint provider
             if let Some(direct) = meshnet_entities.direct.as_ref() {
                 if let Some(stun_ep) = direct.stun_endpoint_provider.as_ref() {
