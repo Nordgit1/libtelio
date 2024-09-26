@@ -213,6 +213,8 @@ impl Telio {
             panic::set_hook(Box::new(move |info| {
                 // We need it on the logs as well ...
                 error!("{}", info);
+                let backtrace = std::backtrace::Backtrace::capture();
+                telio_log_debug!("backtrace: {:#?}", backtrace);
 
                 let err = {
                     let message = {
