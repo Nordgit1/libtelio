@@ -7,7 +7,11 @@ from helpers import SetupParameters, setup_environment, setup_mesh_nodes, setup_
 from mesh_api import API
 from telio import AdapterType, PathType, PeerInfo, State, Client
 from utils import stun
-from utils.bindings import features_with_endpoint_providers, EndpointProvider
+from utils.bindings import (
+    default_features,
+    features_with_endpoint_providers,
+    EndpointProvider,
+)
 from utils.connection_tracker import ConnectionLimits
 from utils.connection_util import (
     generate_connection_tracker_config,
@@ -387,6 +391,7 @@ async def test_event_content_vpn_connection(
                     derp_1_limits=ConnectionLimits(1, 1),
                     stun_limits=ConnectionLimits(1, 2),
                 ),
+                features=default_features(enable_firewall=("10.0.0.0/8", False)),
             )
         )
     ],
@@ -401,6 +406,9 @@ async def test_event_content_exit_through_peer(
         alpha.nickname = "alpha"
         beta.nickname = "BETA"
         alpha.set_peer_firewall_settings(beta.id)
+        beta.set_peer_firewall_settings(
+            alpha.id, allow_incoming_connections=True, allow_peer_traffic_routing=True
+        )
         env = await setup_mesh_nodes(
             exit_stack, [alpha_setup_params, beta_setup_params], provided_api=api
         )
