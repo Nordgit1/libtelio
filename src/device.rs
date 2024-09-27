@@ -2008,12 +2008,14 @@ impl Runtime {
             .unwrap_or_default();
 
         if is_meshnet_exit_node {
+            telio_log_debug!("!!!!! is_meshnet_exit_node");
             if let Some(dns) = &self.entities.dns.lock().await.resolver {
                 self.reconfigure_dns_peer(dns, &dns.get_default_dns_servers())
                     .await?;
             }
         } else if let Some(addr) = exit_node.endpoint {
             if let Some(pmtud) = &mut self.entities.pmtu_detection {
+                telio_log_debug!("!!!!! pmtu_detection");
                 pmtud.run(addr.ip()).await;
             }
         } else {

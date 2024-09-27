@@ -99,6 +99,7 @@ impl Adapter for BoringTun {
     }
 
     async fn stop(&self) {
+        telio_log_debug!("!!!!! stop");
         self.device.read().await.trigger_exit();
         self.device.write().await.wait();
     }
@@ -108,6 +109,7 @@ impl Adapter for BoringTun {
             return;
         };
 
+        telio_log_debug!("!!!!! inject_reset_packets");
         telio_log_debug!("Reseting existing connection with packet injection");
 
         struct Sink4<'a> {
@@ -120,16 +122,21 @@ impl Adapter for BoringTun {
 
         impl<'a> io::Write for Sink4<'a> {
             fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                Ok(self.tun.write4(buf))
+                telio_log_debug!("!!!!! .tun.write4");
+                let result = self.tun.write4(buf);
+                telio_log_debug!("!!!!! .tun.write4 OK -> {result}");
+                Ok(result)
             }
 
             fn flush(&mut self) -> io::Result<()> {
+                telio_log_debug!("!!!!! .flush");
                 Ok(())
             }
         }
 
         impl<'a> io::Write for Sink6<'a> {
             fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                telio_log_debug!("!!!!! .tun.write6");
                 Ok(self.tun.write6(buf))
             }
 
@@ -138,6 +145,7 @@ impl Adapter for BoringTun {
             }
         }
 
+        telio_log_debug!("!!!!! device.read()");
         let dev = self.device.read().await;
         let dev = dev.device.read();
         let tun = dev.iface();
@@ -145,6 +153,8 @@ impl Adapter for BoringTun {
         let mut sink4 = Sink4 { tun };
         let mut sink6 = Sink6 { tun };
 
+        telio_log_debug!("!!!!! inject_reset_packets cb");
         cb(exit_pubkey, exit_ipv4, &mut sink4, &mut sink6);
+        telio_log_debug!("!!!!! inject_reset_packets done");
     }
 }

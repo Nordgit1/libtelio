@@ -548,11 +548,13 @@ impl WireGuard for DynamicWg {
         pubkey: PublicKey,
         ipv4: Ipv4Addr,
     ) -> Result<(), Error> {
+        telio_log_debug!("!!!!! reset_existing_connections");
         task_exec!(&self.task, async move |s| {
             s.adapter.inject_reset_packets(&pubkey, ipv4).await;
             Ok(())
         })
         .await?;
+        telio_log_debug!("!!!!! reset_existing_connections done");
 
         Ok(())
     }

@@ -1196,8 +1196,15 @@ impl StatefullFirewall {
                     ipv4pkg.set_checksum(pnet_packet::ipv4::checksum(&ipv4pkg.to_immutable()));
                     drop(ipv4pkg);
 
+                    telio_log_debug!(
+                        "!!!! lens {IPV4_HEADER_LEN} {ICMP_HEADER_LEN} {}",
+                        last_headers.len()
+                    );
+                    let total_length = IPV4_HEADER_LEN + ICMP_HEADER_LEN + last_headers.len();
+                    telio_log_debug!("!!!! set_total_length {total_length}");
                     telio_log_debug!("Injecting IPv4 ICMP (for UDP) packet {key:#?}");
                     sink4.write_all(ipv4pkgbuf)?;
+                    telio_log_debug!("!!!! sink4.write_all");
                 }
                 (IpAddr::Ipv6(_), IpAddr::Ipv6(_)) => (), // TODO(msz): implement this piece when IPv6 will be fully supported
                 _ => telio_log_warn!(

@@ -35,6 +35,7 @@ impl Entity {
     }
 
     pub async fn run(&mut self, host: IpAddr) {
+        telio_utils::telio_log_debug!("!!!! Running PMTU discovery task");
         self.stop().await;
         self.start(host);
     }
