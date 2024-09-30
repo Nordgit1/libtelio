@@ -1136,6 +1136,10 @@ impl StatefullFirewall {
         ipv4pkg.set_version(4);
         ipv4pkg.set_header_length(5);
         ipv4pkg.set_total_length((IPV4_HEADER_LEN + ICMP_HEADER_LEN + ICMP_MAX_DATA_LEN) as _);
+        telio_log_debug!(
+            "!!!! ipv4pkg.set_total_length = {}",
+            (IPV4_HEADER_LEN + ICMP_HEADER_LEN + ICMP_MAX_DATA_LEN)
+        );
         ipv4pkg.set_flags(Ipv4Flags::DontFragment);
         ipv4pkg.set_ttl(0xFF);
         ipv4pkg.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
@@ -1152,6 +1156,8 @@ impl StatefullFirewall {
         icmppkg.set_icmp_code(IcmpCodes::DestinationPortUnreachable);
         drop(icmppkg);
 
+        telio_log_debug!("!!!! ipv4pkgbuf len = {}", ipv4pkgbuf.len());
+
         let iter = udp_conn_cache.iter().filter_map(|(k, v)| {
             // Skip connection without outbounded packages
             let last_headers = v.last_out_pkg_chunk.as_deref()?;
@@ -1165,6 +1171,7 @@ impl StatefullFirewall {
 
         for (key, last_headers) in iter {
             let end = IPV4_HEADER_LEN + ICMP_HEADER_LEN + last_headers.len();
+            telio_log_debug!("!!!! ipv4pkgbuf end = {end}");
 
             #[allow(index_access_check)]
             let ipv4pkgbuf = &mut ipv4pkgbuf[..end];
@@ -1203,6 +1210,7 @@ impl StatefullFirewall {
                     let total_length = IPV4_HEADER_LEN + ICMP_HEADER_LEN + last_headers.len();
                     telio_log_debug!("!!!! set_total_length {total_length}");
                     telio_log_debug!("Injecting IPv4 ICMP (for UDP) packet {key:#?}");
+                    telio_log_debug!("writing ipv4pkgbuf len {}", ipv4pkgbuf.len());
                     sink4.write_all(ipv4pkgbuf)?;
                     telio_log_debug!("!!!! sink4.write_all");
                 }
