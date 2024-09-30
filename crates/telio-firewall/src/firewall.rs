@@ -1135,16 +1135,15 @@ impl StatefullFirewall {
             .expect("IPv4 buffer should not be too small");
         ipv4pkg.set_version(4);
         ipv4pkg.set_header_length(5);
-        ipv4pkg.set_total_length((IPV4_HEADER_LEN + ICMP_HEADER_LEN + ICMP_MAX_DATA_LEN) as _);
-        telio_log_debug!(
-            "!!!! ipv4pkg.set_total_length = {}",
-            (IPV4_HEADER_LEN + ICMP_HEADER_LEN + ICMP_MAX_DATA_LEN)
-        );
+        let ipv4pkg_len = IPV4_HEADER_LEN + ICMP_HEADER_LEN + ICMP_MAX_DATA_LEN;
+        ipv4pkg.set_total_length((ipv4pkg_len) as _);
+        telio_log_debug!("!!!! ipv4pkg.set_total_length = {}", (ipv4pkg_len));
         ipv4pkg.set_flags(Ipv4Flags::DontFragment);
         ipv4pkg.set_ttl(0xFF);
         ipv4pkg.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
         ipv4pkg.set_source(endpoint_ipv4);
         drop(ipv4pkg);
+        telio_log_debug!("!!!! ipv4pkgbuf len = {}", ipv4pkgbuf.len());
 
         #[allow(clippy::expect_used)]
         #[allow(index_access_check)]
@@ -1155,8 +1154,6 @@ impl StatefullFirewall {
         icmppkg.set_icmp_type(IcmpTypes::DestinationUnreachable);
         icmppkg.set_icmp_code(IcmpCodes::DestinationPortUnreachable);
         drop(icmppkg);
-
-        telio_log_debug!("!!!! ipv4pkgbuf len = {}", ipv4pkgbuf.len());
 
         let iter = udp_conn_cache.iter().filter_map(|(k, v)| {
             // Skip connection without outbounded packages
@@ -1172,6 +1169,7 @@ impl StatefullFirewall {
         for (key, last_headers) in iter {
             let end = IPV4_HEADER_LEN + ICMP_HEADER_LEN + last_headers.len();
             telio_log_debug!("!!!! ipv4pkgbuf end = {end}");
+            telio_log_debug!("!!!! last_headers len = {}", last_headers.len());
 
             #[allow(index_access_check)]
             let ipv4pkgbuf = &mut ipv4pkgbuf[..end];
@@ -1195,9 +1193,8 @@ impl StatefullFirewall {
                     let mut ipv4pkg = MutableIpv4Packet::new(&mut ipv4pkgbuf[..IPV4_HEADER_LEN])
                         .expect("IPv4 buffer should not be too small");
                     ipv4pkg.set_destination(dst);
-                    ipv4pkg.set_total_length(
-                        (IPV4_HEADER_LEN + ICMP_HEADER_LEN + last_headers.len()) as _,
-                    );
+                    let total_length = IPV4_HEADER_LEN + ICMP_HEADER_LEN + last_headers.len();
+                    ipv4pkg.set_total_length((total_length) as _);
 
                     ipv4pkg.set_checksum(0);
                     ipv4pkg.set_checksum(pnet_packet::ipv4::checksum(&ipv4pkg.to_immutable()));
@@ -1207,12 +1204,11 @@ impl StatefullFirewall {
                         "!!!! lens {IPV4_HEADER_LEN} {ICMP_HEADER_LEN} {}",
                         last_headers.len()
                     );
-                    let total_length = IPV4_HEADER_LEN + ICMP_HEADER_LEN + last_headers.len();
                     telio_log_debug!("!!!! set_total_length {total_length}");
                     telio_log_debug!("Injecting IPv4 ICMP (for UDP) packet {key:#?}");
                     telio_log_debug!("writing ipv4pkgbuf len {}", ipv4pkgbuf.len());
                     sink4.write_all(ipv4pkgbuf)?;
-                    telio_log_debug!("!!!! sink4.write_all");
+                    telio_log_debug!("!!!! sink4.write_all done");
                 }
                 (IpAddr::Ipv6(_), IpAddr::Ipv6(_)) => (), // TODO(msz): implement this piece when IPv6 will be fully supported
                 _ => telio_log_warn!(
