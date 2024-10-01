@@ -635,6 +635,7 @@ impl Device {
 
     #[cfg(not(windows))]
     async fn protect_from_vpn(&self, adapter: &impl WireGuard) -> Result {
+        telio_log_debug!("!!!!! protect_from_vpn");
         if let Some(protect) = self.protect.as_ref() {
             if let Some(fd) = adapter.get_wg_socket(false).await? {
                 let _ = protect.make_external(fd);
@@ -692,6 +693,7 @@ impl Device {
     /// new node is created and WireGuard tunnel is established to that node. In the latter case
     /// the specified (matched by public key) meshnet node is "promoted" to be the exit node
     pub fn connect_exit_node(&self, node: &ExitNode) -> Result {
+        telio_log_debug!("!!!!! device::connect_exit_node node: {:?}", node);
         self.async_runtime()?.block_on(async {
             let node = node.clone();
             let _wireguard_interface: Arc<DynamicWg> = task_exec!(self.rt()?, async move |rt| {
@@ -1946,6 +1948,7 @@ impl Runtime {
 
     /// Connect ot exit node with post-quantum tunnel
     async fn connect_exit_node_pq(&mut self, exit_node: &ExitNode) -> Result {
+        telio_log_debug!("!!!!! device::connect_exit_node_pq");
         if self.requested_state.meshnet_config.is_some() {
             // Meshnet is enabled and we're trying to set up the QP VPN connection
             return Err(Error::MeshnetUnavailableWithPQ);
@@ -1967,6 +1970,7 @@ impl Runtime {
 
     async fn connect_exit_node(&mut self, exit_node: &ExitNode) -> Result {
         // Silence the nagger warning
+        telio_log_debug!("!!!!! device::connect_exit_node");
         Box::pin(self.connect_exit_node_internal(exit_node, false)).await
     }
 
@@ -1975,12 +1979,15 @@ impl Runtime {
         exit_node: &ExitNode,
         postquantum: bool,
     ) -> Result {
+        telio_log_debug!("!!!!! device::connect_exit_node_internal");
         let exit_node = exit_node.clone();
 
+        telio_log_debug!("!!!!! .postquantum_wg.stop");
         // Stop post quantum key rotation task if it's running
         self.entities.postquantum_wg.stop();
 
         if postquantum {
+            telio_log_debug!("!!!!! .postquantum_wg.start");
             self.entities.postquantum_wg.start(
                 exit_node.endpoint.ok_or(Error::EndpointNotProvided)?,
                 self.requested_state.device_config.private_key,
@@ -2001,12 +2008,14 @@ impl Runtime {
             .unwrap_or_default();
 
         if is_meshnet_exit_node {
+            telio_log_debug!("!!!!! is_meshnet_exit_node");
             if let Some(dns) = &self.entities.dns.lock().await.resolver {
                 self.reconfigure_dns_peer(dns, &dns.get_default_dns_servers())
                     .await?;
             }
         } else if let Some(addr) = exit_node.endpoint {
             if let Some(pmtud) = &mut self.entities.pmtu_detection {
+                telio_log_debug!("!!!!! pmtu_detection");
                 pmtud.run(addr.ip()).await;
             }
         } else {
@@ -2014,6 +2023,7 @@ impl Runtime {
         }
 
         let old_exit_node = self.requested_state.exit_node.replace(exit_node);
+        telio_log_debug!("!!!!! consolidate_wg_state");
         wg_controller::consolidate_wg_state(&self.requested_state, &self.entities, &self.features)
             .boxed()
             .await?;
@@ -2050,6 +2060,7 @@ impl Runtime {
                 Ipv4Addr::new(10, 5, 0, 1)
             };
 
+            telio_log_debug!("!!!!! reset_existing_connections");
             self.entities
                 .wireguard_interface
                 .reset_existing_connections(last_exit.public_key, ipv4)
