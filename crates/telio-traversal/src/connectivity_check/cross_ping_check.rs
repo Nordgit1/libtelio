@@ -47,6 +47,8 @@ pub trait UpgradeController: Send + Sync {
 
 #[async_trait]
 pub trait CrossPingCheckTrait: UpgradeController {
+    async fn pause(&self, key: PublicKey) -> Result<(), Error>;
+    async fn unpause(&self, key: PublicKey) -> Result<(), Error>;
     async fn configure(&self, config: Option<Config>) -> Result<(), Error>;
     async fn get_validated_endpoints(
         &self,
@@ -63,6 +65,8 @@ mockall::mock! {
 
     #[async_trait]
     impl CrossPingCheckTrait for CrossPingCheckTrait {
+        async fn pause(&self, key: PublicKey) -> Result<(), Error>;
+        async fn unpause(&self, key: PublicKey) -> Result<(), Error>;
         async fn configure(&self, config: Option<Config>) -> Result<(), Error>;
         async fn get_validated_endpoints(
             &self,
@@ -116,6 +120,9 @@ pub struct Io {
 type ExponentialBackoffProvider<E> = Box<dyn Fn() -> Result<E, Error> + Send>;
 
 pub struct State<E: Backoff> {
+    /// Paused node keys
+    paused_nodes: HashSet<PublicKey>,
+
     /// Input and output channels
     io: Io,
 
@@ -185,6 +192,7 @@ impl<E: Backoff> CrossPingCheck<E> {
                 ping_pong_handler,
                 exponential_backoff_helper_provider,
                 session_id_candidates: LruCache::new(UPGRADE_TIMEOUT, MAX_SESSION_CANDIDATES),
+                paused_nodes: HashSet::new(),
             }),
         }
     }
@@ -220,6 +228,32 @@ impl CrossPingCheck {
 
 #[async_trait]
 impl CrossPingCheckTrait for CrossPingCheck {
+    async fn pause(&self, key: PublicKey) -> Result<(), Error> {
+        telio_log_debug!("Pausing CPC for {}", key);
+
+        let _ = task_exec!(&self.task, async move |s| {
+            s.paused_nodes.insert(key);
+
+            Ok(())
+        })
+        .await;
+
+        Ok(())
+    }
+
+    async fn unpause(&self, key: PublicKey) -> Result<(), Error> {
+        telio_log_debug!("Unpausing CPC for {}", key);
+
+        let _ = task_exec!(&self.task, async move |s| {
+            s.paused_nodes.remove(&key);
+
+            Ok(())
+        })
+        .await;
+
+        Ok(())
+    }
+
     async fn get_validated_endpoints(
         &self,
     ) -> Result<HashMap<PublicKey, WireGuardEndpointCandidateChangeEvent>, Error> {
@@ -286,7 +320,7 @@ impl CrossPingCheckTrait for CrossPingCheck {
 }
 
 impl<E: Backoff> State<E> {
-    fn get_connectivty_check_state<'a>(
+    fn get_connectivity_check_state<'a>(
         ep_connectivity_state: &'a mut HashMap<Session, EndpointConnectivityCheckState<E>>,
         session_id: &Session,
     ) -> Result<&'a mut EndpointConnectivityCheckState<E>, Error> {
@@ -344,6 +378,14 @@ impl<E: Backoff> State<E> {
         // Create sessions for all new nodes
         for added_node in added_nodes {
             for (provider_type, endpoints) in &self.local_endpoint_cache {
+                let paused = self.paused_nodes.contains(&added_node);
+
+                if paused {
+                    telio_log_warn!(
+                        "Node was just added but it already is in the CPC paused peer list"
+                    );
+                }
+
                 for endpoint in endpoints {
                     let session_id = rand::random::<Session>();
                     let session = EndpointConnectivityCheckState {
@@ -356,6 +398,7 @@ impl<E: Backoff> State<E> {
                         exponential_backoff: (self.exponential_backoff_helper_provider)()?,
                         local_session: session_id,
                         provider_type: provider_type.into(),
+                        paused,
                     };
 
                     // Store freshly created connectivity check session
@@ -410,6 +453,7 @@ impl<E: Backoff> State<E> {
         for added_endpoint in added_endpoints {
             for node in self.gather_all_nodes()? {
                 let session_id = rand::random::<Session>();
+                let paused = self.paused_nodes.contains(&node);
                 let session = EndpointConnectivityCheckState {
                     public_key: node,
                     local_endpoint_candidate: added_endpoint.clone(),
@@ -420,6 +464,7 @@ impl<E: Backoff> State<E> {
                     last_rx_time_provider: self.last_rx_time_provider.clone(),
                     exponential_backoff: (self.exponential_backoff_helper_provider)()?,
                     provider_type: event.0.into(),
+                    paused,
                 };
 
                 // Store freshly created connectivity check session
@@ -451,7 +496,7 @@ impl<E: Backoff> State<E> {
 
     async fn handle_pong_rx_event(&mut self, event: PongEvent) -> Result<(), Error> {
         let session_id = event.msg.get_session();
-        let session = State::get_connectivty_check_state(
+        let session = State::get_connectivity_check_state(
             &mut self.endpoint_connectivity_check_state,
             &session_id,
         )?;
@@ -475,14 +520,18 @@ impl<E: Backoff> State<E> {
                     .find(|(pk, _)| *pk == public_key)
                     .ok_or(Error::UnexpectedPeer(public_key))?;
 
-                for endpoint in endpoints {
-                    Self::send_ping_via_all_endpoint_providers(
-                        &self.endpoint_providers,
-                        endpoint,
-                        local_session_id,
-                        public_key,
-                    )
-                    .await?;
+                if !self.paused_nodes.contains(&public_key) {
+                    for endpoint in endpoints {
+                        Self::send_ping_via_all_endpoint_providers(
+                            &self.endpoint_providers,
+                            endpoint,
+                            local_session_id,
+                            public_key,
+                        )
+                        .await?;
+                    }
+                } else {
+                    telio_log_debug!("Not sending pings from {} due to being paused", public_key);
                 }
 
                 let remote_session_id = message.get_session();
@@ -506,7 +555,7 @@ impl<E: Backoff> State<E> {
             CallMeMaybeType::RESPONDER => {
                 // Find session and forward the call me maybe message there
                 let session_id = message.get_session();
-                let session = State::get_connectivty_check_state(
+                let session = State::get_connectivity_check_state(
                     &mut self.endpoint_connectivity_check_state,
                     &session_id,
                 )?;
@@ -694,6 +743,7 @@ pub struct EndpointConnectivityCheckState<E: Backoff> {
     last_rx_time_provider: Option<Arc<dyn TimeSinceLastRxProvider>>,
     exponential_backoff: E,
     provider_type: ApiEndpointProvider,
+    paused: bool,
 }
 
 impl<E: Backoff> Debug for EndpointConnectivityCheckState<E> {
@@ -773,14 +823,21 @@ impl<E: Backoff> EndpointConnectivityCheckState<E> {
                     message
                 );
 
-                for addr in message.get_addrs() {
-                    State::<E>::send_ping_via_all_endpoint_providers(
-                        &ep_providers,
-                        addr,
-                        session_id,
-                        public_key,
-                    )
-                    .await?;
+                if !self.paused {
+                    for addr in message.get_addrs() {
+                        State::<E>::send_ping_via_all_endpoint_providers(
+                            &ep_providers,
+                            addr,
+                            session_id,
+                            public_key,
+                        )
+                        .await?;
+                    }
+                } else {
+                    telio_log_debug!(
+                        "Will not respond to CMM from {} because it's paused",
+                        public_key
+                    );
                 }
 
                 do_state_transition!(self, Event::ReceiveCallMeMaybeResponse);
