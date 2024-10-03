@@ -185,6 +185,16 @@ async fn consolidate_wg_peers<
     for (_, peer) in actual_peers.iter() {
         if is_peer_proxying(peer, &proxy_endpoints) && peer.state() == NodeState::Connected {
             is_any_peer_eligible_for_upgrade = true;
+
+            if let Some(cpc) = cross_ping_check {
+                let _ = cpc.pause(peer.public_key);
+            } else {
+                telio_log_debug!("CPC not available");
+            }
+        } else if let Some(cpc) = cross_ping_check {
+            let _ = cpc.unpause(peer.public_key);
+        } else {
+            telio_log_debug!("CPC not available");
         }
     }
 
@@ -233,6 +243,12 @@ async fn consolidate_wg_peers<
     for key in delete_keys {
         let actual_peer = actual_peers.get(key).ok_or(Error::PeerNotFound)?;
         telio_log_info!("Removing peer: {:?}", actual_peer);
+
+        if let Some(cpc) = cross_ping_check {
+            let _ = cpc.unpause(*key);
+        } else {
+            telio_log_debug!("CPC not available");
+        }
 
         let event = AnalyticsEvent {
             public_key: *key,
